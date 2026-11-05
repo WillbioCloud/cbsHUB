@@ -1,0 +1,113 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  --background: hsl(240 10% 6%);          /* #0e0e11 - Fundo principal do Chat */
+  --foreground: hsl(240 5% 96%);          /* #f4f4f6 - Texto primário */
+
+  --card: hsl(240 8% 9%);                 /* #151518 - Cards de usuário / superfícies */
+  --card-foreground: hsl(240 5% 96%);
+
+  --popover: hsl(240 9% 10%);             /* #17171c - Menus, Emoji Picker, Soundboard */
+  --popover-foreground: hsl(240 5% 96%);
+
+  --primary: hsl(235 86% 65%);            /* #5865F2 - Blurple refinado para ações de call/live */
+  --primary-foreground: hsl(0 0% 100%);
+
+  --secondary: hsl(240 6% 14%);           /* #212126 - Botões secundários / controles neutros */
+  --secondary-foreground: hsl(240 5% 90%);
+
+  --muted: hsl(240 6% 13%);               /* #1f1f24 */
+  --muted-foreground: hsl(240 5% 60%);    /* #94949e - Timestamps, legendas */
+
+  --accent: hsl(240 6% 16%);              /* #26262c - Hover em itens de menu/lista */
+  --accent-foreground: hsl(240 5% 98%);
+
+  --destructive: hsl(358 85% 60%);        /* #f23f43 - Mute ativo, Desligar chamada */
+  --destructive-foreground: hsl(0 0% 100%);
+
+  --success: hsl(145 65% 42%);            /* #25b05c - Anel de fala, Entrar na call, Ping bom */
+  --warning: hsl(38 92% 50%);             /* #f59e0b - ABR throttled / reconexão */
+
+  --border: hsl(240 6% 15%);              /* #242429 - Divisor 1px discreto */
+  --input: hsl(240 6% 15%);
+  --ring: hsl(235 86% 65%);
+  --radius: 0.625rem;                     /* 10px */
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-blurple: #5865F2;
+  --color-blurple-hover: #4752C4;
+  --color-blurple-light: #8ea1e1;
+  --color-emerald: #25b05c;
+  --color-coral: #f23f43;
+  --color-coral-hover: #d93236;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    user-select: none;
+    overflow: hidden;
+  }
+}
+
+/* Custom scrollbars discretas e minimalistas */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+}
+
+/* Electron Draggable Window Region */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag, .drag-region button, .drag-region a, .drag-region input, .drag-region [role="button"] {
+  -webkit-app-region: no-drag;
+}

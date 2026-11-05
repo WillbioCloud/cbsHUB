@@ -25,7 +25,7 @@ export function enhanceOpusSdp(sdp: string, isStereo: boolean): string {
   // Canal 2 (tela): stereo=1;sprop-stereo=1;maxaveragebitrate=256000;cbr=1;useinbandfec=1
   const opusParams = isStereo
     ? 'stereo=1;sprop-stereo=1;maxaveragebitrate=256000;cbr=1;useinbandfec=1'
-    : 'maxaveragebitrate=64000;useinbandfec=1;usedtx=1';
+    : 'maxaveragebitrate=64000;useinbandfec=1;usedtx=1;minptime=10;ptime=20';
 
   let fmtpFound = false;
   const newLines: string[] = [];

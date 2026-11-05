@@ -775,40 +775,17 @@ class WebRTCEngine {
     this.teardownPeerVoiceAudio(session);
 
     try {
-      // 1. WORKAROUND OFICIAL CHROMIUM (Bug #933677):
-      // O Chromium só decodifica tracks remotas do WebRTC para o WebAudio se a stream bruta
-      // também estiver associada a uma tag <audio> (mesmo que mutada).
-      let rawKeepAliveEl = document.getElementById(`raw-keepalive-${session.peerId}`) as HTMLAudioElement | null;
-      if (!rawKeepAliveEl) {
-        rawKeepAliveEl = document.createElement('audio');
-        rawKeepAliveEl.id = `raw-keepalive-${session.peerId}`;
-        rawKeepAliveEl.style.display = 'none';
-        document.body.appendChild(rawKeepAliveEl);
-      }
-      rawKeepAliveEl.srcObject = stream;
-      rawKeepAliveEl.muted = true;
-      rawKeepAliveEl.play().catch(() => {});
-
-      // 2. Grafo WebAudio para controle de volume de 0% a 200%
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const ctx = new AudioCtx({ sampleRate: 48000 });
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+      // Zera o jitter buffer extra nos receivers de áudio do WebRTC para latência mínima
+      const pc = session.voiceCall?.peerConnection;
+      if (pc && typeof pc.getReceivers === 'function') {
+        pc.getReceivers().forEach((receiver) => {
+          if (receiver.track?.kind === 'audio' && 'playoutDelayHint' in receiver) {
+            (receiver as unknown as { playoutDelayHint: number }).playoutDelayHint = 0.01;
+          }
+        });
       }
 
-      const source = ctx.createMediaStreamSource(stream);
-      const gain = ctx.createGain();
-      const dest = ctx.createMediaStreamDestination();
-
-      const state = useHubStore.getState();
-      const peerVol = state.peerVolumes[session.clientId] ?? 1.0;
-      const effGain = Math.max(0, Math.min(2.0, peerVol)) * state.audioConfig.remoteStreamVolume * (state.isDeafened ? 0 : 1);
-      gain.gain.setValueAtTime(effGain, ctx.currentTime);
-
-      source.connect(gain);
-      gain.connect(dest);
-
-      // 3. Elemento <audio> final no DOM para saída no fone selecionado (setSinkId)
+      // Reprodução direta na tag <audio> sem intermediário WebAudio (elimina ~250ms de atraso)
       let audioEl = document.getElementById(`audio-peer-${session.peerId}`) as HTMLAudioElement | null;
       if (!audioEl) {
         audioEl = document.createElement('audio');
@@ -817,9 +794,14 @@ class WebRTCEngine {
         document.body.appendChild(audioEl);
       }
 
+      const state = useHubStore.getState();
+      const peerVol = state.peerVolumes[session.clientId] ?? 1.0;
+      const effVol = state.isDeafened ? 0 : Math.max(0, Math.min(1.0, peerVol * state.audioConfig.remoteStreamVolume));
+
       audioEl.autoplay = true;
-      audioEl.muted = false;
-      audioEl.srcObject = dest.stream;
+      audioEl.muted = state.isDeafened;
+      audioEl.volume = effVol;
+      audioEl.srcObject = stream;
 
       const outputId = state.audioConfig.outputDeviceId;
       if (outputId && outputId !== 'default' && 'setSinkId' in audioEl) {
@@ -830,12 +812,7 @@ class WebRTCEngine {
 
       audioEl.play().catch((e) => console.warn('[WebRTC Audio] Falha ao iniciar play:', e));
 
-      session.voiceAudioCtx = ctx;
-      session.voiceSourceNode = source;
-      session.voiceGainNode = gain;
-      session.voiceDestNode = dest;
       session.voiceAudioEl = audioEl;
-
       this.startRemoteVoiceDetection(session, stream);
     } catch (err) {
       console.warn(`[WebRTC Audio] Falha ao configurar áudio para ${session.peerId}:`, err);
@@ -855,12 +832,6 @@ class WebRTCEngine {
       try { session.voiceGainNode.disconnect(); } catch { /* ignore */ }
       session.voiceGainNode = null;
     }
-    const rawKeepAliveEl = document.getElementById(`raw-keepalive-${session.peerId}`) as HTMLAudioElement | null;
-    if (rawKeepAliveEl) {
-      rawKeepAliveEl.pause();
-      rawKeepAliveEl.srcObject = null;
-      rawKeepAliveEl.remove();
-    }
     if (session.voiceAudioEl) {
       session.voiceAudioEl.pause();
       session.voiceAudioEl.srcObject = null;
@@ -879,9 +850,9 @@ class WebRTCEngine {
     const state = useHubStore.getState();
 
     for (const session of this.sessions.values()) {
-      if (session.clientId === clientId && session.voiceGainNode && session.voiceAudioCtx) {
-        const effGain = clamped * state.audioConfig.remoteStreamVolume * (state.isDeafened ? 0 : 1);
-        session.voiceGainNode.gain.setValueAtTime(effGain, session.voiceAudioCtx.currentTime);
+      if (session.clientId === clientId && session.voiceAudioEl) {
+        const effVol = state.isDeafened ? 0 : Math.max(0, Math.min(1.0, clamped * state.audioConfig.remoteStreamVolume));
+        session.voiceAudioEl.volume = effVol;
       }
     }
   }
@@ -1053,12 +1024,14 @@ class WebRTCEngine {
     const nextDeafened = deafened !== undefined ? deafened : !state.isDeafened;
     useHubStore.getState().setDeafened(nextDeafened);
 
-    // Atualiza ganho de todas as sessões para silenciar tudo se deafened
+    // Atualiza o elemento de áudio de todas as sessões para silenciar imediatamente se deafened
     for (const session of this.sessions.values()) {
-      if (session.voiceGainNode && session.voiceAudioCtx) {
+      if (session.voiceAudioEl) {
         const peerVol = state.peerVolumes[session.clientId] ?? 1.0;
-        const effGain = nextDeafened ? 0 : Math.max(0, Math.min(2.0, peerVol)) * state.audioConfig.remoteStreamVolume;
-        session.voiceGainNode.gain.setValueAtTime(effGain, session.voiceAudioCtx.currentTime);
+        session.voiceAudioEl.muted = nextDeafened;
+        session.voiceAudioEl.volume = nextDeafened
+          ? 0
+          : Math.max(0, Math.min(1.0, peerVol * state.audioConfig.remoteStreamVolume));
       }
     }
 
@@ -1237,12 +1210,13 @@ class WebRTCEngine {
       }
 
       const audioConfig = useHubStore.getState().audioConfig;
+      const useSuppression = Boolean(audioConfig.neuralNoiseGate);
       const constraints: MediaStreamConstraints = {
         audio: {
           deviceId: audioConfig.inputDeviceId !== 'default' ? { exact: audioConfig.inputDeviceId } : undefined,
           echoCancellation: audioConfig.echoCancellation,
           autoGainControl: audioConfig.autoGainControl,
-          noiseSuppression: false, // Krisp-like AudioWorklet dedicado cuida disso
+          noiseSuppression: useSuppression,
           sampleRate: 48000,
           channelCount: 1,
         },
@@ -1298,13 +1272,22 @@ class WebRTCEngine {
       this.audioPipeline.updateConfig(partial);
     }
 
+    // Se o usuário ligou/desligou a supressão de ruído, aplica ao vivo na trilha do microfone
+    if (typeof partial.neuralNoiseGate === 'boolean' && this.rawMicStream) {
+      const audioTrack = this.rawMicStream.getAudioTracks()[0];
+      if (audioTrack && typeof audioTrack.applyConstraints === 'function') {
+        audioTrack.applyConstraints({ noiseSuppression: partial.neuralNoiseGate }).catch(() => {});
+      }
+    }
+
     // Se atualizou remoteStreamVolume ou outputDeviceId, aplica em todas as sessões
     const state = useHubStore.getState();
     for (const session of this.sessions.values()) {
-      if (session.voiceGainNode && session.voiceAudioCtx && typeof partial.remoteStreamVolume === 'number') {
+      if (session.voiceAudioEl && typeof partial.remoteStreamVolume === 'number') {
         const peerVol = state.peerVolumes[session.clientId] ?? 1.0;
-        const effGain = Math.max(0, Math.min(2.0, peerVol)) * partial.remoteStreamVolume * (state.isDeafened ? 0 : 1);
-        session.voiceGainNode.gain.setValueAtTime(effGain, session.voiceAudioCtx.currentTime);
+        session.voiceAudioEl.volume = state.isDeafened
+          ? 0
+          : Math.max(0, Math.min(1.0, peerVol * partial.remoteStreamVolume));
       }
 
       if (partial.outputDeviceId && session.voiceAudioEl && 'setSinkId' in session.voiceAudioEl) {

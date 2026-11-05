@@ -7,17 +7,17 @@ class KrispLikeNoiseGateProcessor extends AudioWorkletProcessor {
     this.enabled = true;
     this.currentGain = 1.0;
     this.sampleRate = 48000;
-    this.thresholdDb = -48.0;
-    // Coeficientes de ataque (2ms) e release (120ms)
+    this.openThresholdDb = -36.0;
+    this.closeThresholdDb = -42.0;
+    this.isOpen = false;
+    this.holdSamples = 0;
+    this.maxHoldSamples = Math.floor(0.08 * this.sampleRate); // 80ms hold
     this.attackCoef = Math.exp(-1.0 / (0.002 * this.sampleRate));
-    this.releaseCoef = Math.exp(-1.0 / (0.120 * this.sampleRate));
+    this.releaseCoef = Math.exp(-1.0 / (0.070 * this.sampleRate));
 
     this.port.onmessage = (event) => {
       if (event.data && typeof event.data.enabled === 'boolean') {
         this.enabled = event.data.enabled;
-      }
-      if (event.data && typeof event.data.thresholdDb === 'number') {
-        this.thresholdDb = event.data.thresholdDb;
       }
     };
   }
@@ -37,7 +37,6 @@ class KrispLikeNoiseGateProcessor extends AudioWorkletProcessor {
       return true;
     }
 
-    // Calcula RMS do bloco de 128 amostras
     let sumSquares = 0;
     const primaryChannel = input[0];
     for (let i = 0; i < frameLength; i++) {
@@ -47,7 +46,18 @@ class KrispLikeNoiseGateProcessor extends AudioWorkletProcessor {
     const rms = Math.sqrt(sumSquares / frameLength);
     const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
 
-    const targetGain = rmsDb > this.thresholdDb ? 1.0 : 0.005;
+    if (rmsDb > this.openThresholdDb) {
+      this.isOpen = true;
+      this.holdSamples = this.maxHoldSamples;
+    } else if (this.isOpen) {
+      if (this.holdSamples > 0) {
+        this.holdSamples -= frameLength;
+      } else if (rmsDb < this.closeThresholdDb) {
+        this.isOpen = false;
+      }
+    }
+
+    const targetGain = this.isOpen ? 1.0 : 0.002;
 
     for (let i = 0; i < frameLength; i++) {
       const coef = targetGain > this.currentGain ? this.attackCoef : this.releaseCoef;
@@ -97,7 +107,7 @@ export class VoiceAudioPipeline {
 
   public async initialize(): Promise<MediaStream> {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioCtx = new AudioCtx({ sampleRate: 48000 });
+    this.audioCtx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
 
     if (this.audioCtx.state === 'suspended') {
       await this.audioCtx.resume();

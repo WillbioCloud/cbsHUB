@@ -9,6 +9,7 @@ import {
   Sliders,
   Tv,
 } from 'lucide-react';
+import { shallow } from 'zustand/shallow';
 import { useHubStore } from '../store/useHubStore';
 import { webrtcEngine } from '../lib/webrtcEngine';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
@@ -32,12 +33,20 @@ interface UserCallCardProps {
 }
 
 export const UserCallCard: React.FC<UserCallCardProps> = ({ participant, isCompact = false }) => {
-  const { localWebcamStream, remoteStreams, peerVolumes } = useHubStore();
+  // Assinatura focada: cada card só re-renderiza quando o SEU stream/volume muda
+  const { localWebcamStream, ownStreams, peerVolumes } = useHubStore(
+    (state) => ({
+      localWebcamStream: state.localWebcamStream,
+      ownStreams: state.remoteStreams[participant.peerId],
+      peerVolumes: state.peerVolumes,
+    }),
+    shallow
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
 
   const isLocal = participant.isLocal;
-  const webcamStream = isLocal ? localWebcamStream : remoteStreams[participant.peerId]?.webcam;
+  const webcamStream = isLocal ? localWebcamStream : ownStreams?.webcam;
   const hasActiveWebcam = participant.isWebcamActive && Boolean(webcamStream);
   const isSpeakingNow = participant.isSpeaking && !participant.isMuted;
   const volume = peerVolumes[participant.clientId] ?? 1.0;

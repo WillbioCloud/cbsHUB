@@ -50,20 +50,43 @@ export const CallStagePanel: React.FC = () => {
   const participantsInVoice = Object.values(participants).filter((p) => p.inVoiceCall);
   const inVoiceCount = participantsInVoice.length;
 
-  // Participantes compartilhando tela
+  // Participantes compartilhando tela.
+  // Antes dependia apenas do flag isScreenSharing do participante, então quando a
+  // flag não chegava (sessão sem sync de estado) a tela do irmão nunca aparecia.
+  // Agora qualquer stream de tela recebido vira tile, mesmo sem flag.
   const screenSharers: Array<{ participant: Participant; stream: MediaStream; key: string }> = [];
+  const screenPeerIds = new Set<string>();
 
   for (const p of Object.values(participants)) {
-    if (p.isScreenSharing) {
-      const stream = p.isLocal ? localScreenStream : remoteStreams[p.peerId]?.screen;
-      if (stream) {
-        screenSharers.push({
-          participant: p,
-          stream,
-          key: `screen-${p.peerId}`,
-        });
-      }
+    const stream = p.isLocal ? localScreenStream : remoteStreams[p.peerId]?.screen;
+    if (stream) {
+      screenPeerIds.add(p.peerId);
+      screenSharers.push({ participant: p, stream, key: `screen-${p.peerId}` });
+    } else if (p.isScreenSharing && p.isLocal && localScreenStream) {
+      screenPeerIds.add(p.peerId);
+      screenSharers.push({ participant: p, stream: localScreenStream, key: `screen-${p.peerId}` });
     }
+  }
+
+  // Streams de tela sem participante conhecido (estado ainda sincronizando)
+  for (const [peerId, streams] of Object.entries(remoteStreams)) {
+    if (!streams.screen || screenPeerIds.has(peerId)) continue;
+    const known = participants[peerId];
+    const placeholder: Participant = known || {
+      peerId,
+      clientId: peerId,
+      nickname: 'Irmão',
+      avatarColor: 'hsl(235, 86%, 65%)',
+      isLocal: false,
+      inVoiceCall: true,
+      isMuted: false,
+      isDeafened: false,
+      isSpeaking: false,
+      isWebcamActive: false,
+      isScreenSharing: true,
+    };
+    screenPeerIds.add(peerId);
+    screenSharers.push({ participant: { ...placeholder, isScreenSharing: true }, stream: streams.screen, key: `screen-${peerId}` });
   }
 
   // Stream focado no modo Spotlight
@@ -396,6 +419,13 @@ export const CallStagePanel: React.FC = () => {
       {/* Grade de Cards Responsiva */}
       <div className="flex-1 overflow-y-auto p-4 flex items-center justify-center">
         <div className={`grid gap-3 w-full mx-auto items-center justify-center ${getGridColsClass()}`}>
+          {/* Sozinho na sala de voz: dica de espera */}
+          {inVoiceCount <= 1 && screenSharers.length === 0 && (
+            <div className="col-span-full flex items-center justify-center gap-2 pb-1 text-[11px] text-muted-foreground">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Você está na voz — aguardando os irmãos entrarem na chamada…</span>
+            </div>
+          )}
           {/* Tiles de Transmissão de Tela */}
           {screenSharers.map(({ participant, stream, key }) => (
             <ScreenShareTile

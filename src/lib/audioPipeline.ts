@@ -1,23 +1,38 @@
 import type { AudioProcessingConfig } from '../types/cbshub';
 
+/**
+ * Gate de ruído "Krisp-like" via AudioWorklet.
+ *
+ * IMPORTANTE (calibração): os limiares antigos (-36 dB para abrir / -42 dB para fechar)
+ * eram altos demais para microfones reais. Um usuário falando a 40 cm do microfone
+ * fica facilmente entre -45 dB e -38 dB de RMS, então o gate fechava e a voz do irmão
+ * simplesmente não saía no WebRTC (o outro lado não escutava nada). Além disso o ganho
+ * de "fechado" ficava em 0.002, mascarando o medidor de fala.
+ *
+ * Agora os limiares são mais baixos, com hold proporcional e sem cortar a fala.
+ */
 const NOISE_GATE_WORKLET_CODE = `
 class KrispLikeNoiseGateProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.enabled = true;
     this.currentGain = 1.0;
-    this.sampleRate = 48000;
-    this.openThresholdDb = -36.0;
-    this.closeThresholdDb = -42.0;
-    this.isOpen = false;
+    this.sampleRate = sampleRate || 48000;
+    this.openThresholdDb = -48.0;
+    this.closeThresholdDb = -54.0;
+    this.isOpen = true;
     this.holdSamples = 0;
-    this.maxHoldSamples = Math.floor(0.08 * this.sampleRate); // 80ms hold
-    this.attackCoef = Math.exp(-1.0 / (0.002 * this.sampleRate));
-    this.releaseCoef = Math.exp(-1.0 / (0.070 * this.sampleRate));
+    this.maxHoldSamples = Math.floor(0.12 * this.sampleRate); // 120ms hold
+    this.attackCoef = Math.exp(-1.0 / (0.004 * this.sampleRate));
+    this.releaseCoef = Math.exp(-1.0 / (0.090 * this.sampleRate));
 
     this.port.onmessage = (event) => {
       if (event.data && typeof event.data.enabled === 'boolean') {
         this.enabled = event.data.enabled;
+        if (!this.enabled) {
+          this.isOpen = true;
+          this.currentGain = 1.0;
+        }
       }
     };
   }
@@ -51,13 +66,13 @@ class KrispLikeNoiseGateProcessor extends AudioWorkletProcessor {
       this.holdSamples = this.maxHoldSamples;
     } else if (this.isOpen) {
       if (this.holdSamples > 0) {
-        this.holdSamples -= frameLength;
+        this.holdSamples = Math.max(0, this.holdSamples - frameLength);
       } else if (rmsDb < this.closeThresholdDb) {
         this.isOpen = false;
       }
     }
 
-    const targetGain = this.isOpen ? 1.0 : 0.002;
+    const targetGain = this.isOpen ? 1.0 : 0.0;
 
     for (let i = 0; i < frameLength; i++) {
       const coef = targetGain > this.currentGain ? this.attackCoef : this.releaseCoef;
@@ -88,6 +103,7 @@ export class VoiceAudioPipeline {
   private compressorNode: DynamicsCompressorNode | null = null;
   private gainNode: GainNode | null = null;
   private analyserNode: AnalyserNode | null = null;
+  private analyserSinkNode: GainNode | null = null;
   private micMuteNode: GainNode | null = null;
   private soundboardInputNode: GainNode | null = null;
   private destinationNode: MediaStreamAudioDestinationNode | null = null;
@@ -96,6 +112,8 @@ export class VoiceAudioPipeline {
   private onSpeakingChange: SpeakingCallback | null = null;
   private isDestroyed = false;
   private isMicMuted = false;
+  private lastIsSpeaking = false;
+  private lastLevel = -1;
 
   constructor(stream: MediaStream, config: AudioProcessingConfig, onSpeakingChange?: SpeakingCallback) {
     this.rawStream = stream;
@@ -106,22 +124,35 @@ export class VoiceAudioPipeline {
   }
 
   public async initialize(): Promise<MediaStream> {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioCtx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+
+    // Alguns drivers não aceitam 48kHz fixos; tenta e faz fallback para o padrão do sistema.
+    try {
+      this.audioCtx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
+    } catch {
+      this.audioCtx = new AudioCtx({ latencyHint: 'interactive' });
+    }
 
     if (this.audioCtx.state === 'suspended') {
-      await this.audioCtx.resume();
+      // Pode falhar antes de um gesto do usuário (política de autoplay); o resume()
+      // é chamado novamente no clique de "Entrar na Voz" / primeiro pointerdown.
+      await this.audioCtx.resume().catch(() => {});
     }
 
     this.sourceNode = this.audioCtx.createMediaStreamSource(this.rawStream);
 
-    // Biquad High-Pass Filter @ 80Hz, Q=0.707 (Corta ruído de mesa / coolers)
+    // Biquad High-Pass Filter @ 80Hz (corta ruído de mesa / coolers)
     this.highPassFilter = this.audioCtx.createBiquadFilter();
     this.highPassFilter.type = 'highpass';
-    this.highPassFilter.frequency.setValueAtTime(this.config.highPassFilter80Hz ? 80 : 10, this.audioCtx.currentTime);
+    this.highPassFilter.frequency.setValueAtTime(
+      this.config.highPassFilter80Hz ? 80 : 10,
+      this.audioCtx.currentTime
+    );
     this.highPassFilter.Q.setValueAtTime(0.707, this.audioCtx.currentTime);
 
-    // Biquad Low-Pass Filter @ 14000Hz (Corta chiado agudo elétrico)
+    // Biquad Low-Pass Filter @ 14kHz (corta chiado agudo elétrico)
     this.lowPassFilter = this.audioCtx.createBiquadFilter();
     this.lowPassFilter.type = 'lowpass';
     this.lowPassFilter.frequency.setValueAtTime(14000, this.audioCtx.currentTime);
@@ -152,10 +183,16 @@ export class VoiceAudioPipeline {
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.gain.setValueAtTime(this.config.micGain, this.audioCtx.currentTime);
 
-    // Analisador para VU meter e detecção de fala Discord-style
+    // Analisador para VU meter e detecção de fala Discord-style.
+    // Fica em PARALELO (tap) no início do caminho, ANTES do gate: assim o anel verde
+    // e o VU meter refletem o microfone real, mesmo quando o gate está fechado.
     this.analyserNode = this.audioCtx.createAnalyser();
     this.analyserNode.fftSize = 512;
     this.analyserNode.smoothingTimeConstant = 0.4;
+    this.analyserSinkNode = this.audioCtx.createGain();
+    this.analyserSinkNode.gain.setValueAtTime(0, this.audioCtx.currentTime);
+    this.analyserNode.connect(this.analyserSinkNode);
+    this.analyserSinkNode.connect(this.audioCtx.destination);
 
     // Nó de mute suave exclusivo do Microfone (corta voz sem cortar o Soundboard!)
     this.micMuteNode = this.audioCtx.createGain();
@@ -169,14 +206,18 @@ export class VoiceAudioPipeline {
     this.soundboardInputNode.gain.setValueAtTime(1.0, this.audioCtx.currentTime);
     this.soundboardInputNode.connect(this.destinationNode);
 
-    // Encadeamento do Pipeline de Áudio:
-    // source -> highPass -> lowPass -> [worklet] -> compressor -> gain -> analyser -> micMuteNode -> destination
+    // Encadeamento principal:
+    // source -> highPass -> lowPass -> [worklet gate] -> compressor -> gain -> micMute -> destination
+    //                          \-> analyser (tap paralelo para VU meter / fala)
     let lastNode: AudioNode = this.sourceNode;
     lastNode.connect(this.highPassFilter);
     lastNode = this.highPassFilter;
 
     lastNode.connect(this.lowPassFilter);
     lastNode = this.lowPassFilter;
+
+    // Tap de medição (paralelo, não altera o áudio enviado)
+    lastNode.connect(this.analyserNode);
 
     if (this.workletNode) {
       lastNode.connect(this.workletNode);
@@ -189,9 +230,7 @@ export class VoiceAudioPipeline {
     lastNode.connect(this.gainNode);
     lastNode = this.gainNode;
 
-    lastNode.connect(this.analyserNode);
-
-    this.analyserNode.connect(this.micMuteNode);
+    lastNode.connect(this.micMuteNode);
     this.micMuteNode.connect(this.destinationNode);
 
     this.processedStream = this.destinationNode.stream;
@@ -206,12 +245,16 @@ export class VoiceAudioPipeline {
 
     const dataArray = new Float32Array(this.analyserNode.fftSize);
 
+    // 80ms (~12 fps): suficiente para feedback visual fluido sem re-renderizar
+    // a árvore React inteira 22 vezes por segundo (o app travava na call).
     this.meterInterval = window.setInterval(() => {
       if (this.isDestroyed || !this.analyserNode) return;
 
       // Se estiver mutado no microfone, reporta sempre fala inativa e nível 0
       if (this.isMicMuted) {
-        if (this.onSpeakingChange) {
+        if (this.onSpeakingChange && (this.lastIsSpeaking || this.lastLevel !== 0)) {
+          this.lastIsSpeaking = false;
+          this.lastLevel = 0;
           this.onSpeakingChange(false, 0);
         }
         return;
@@ -220,22 +263,42 @@ export class VoiceAudioPipeline {
       this.analyserNode.getFloatTimeDomainData(dataArray);
 
       let sum = 0;
+      let peak = 0;
       for (let i = 0; i < dataArray.length; i++) {
         const val = dataArray[i];
         sum += val * val;
+        const abs = Math.abs(val);
+        if (abs > peak) peak = abs;
       }
 
       const rms = Math.sqrt(sum / dataArray.length);
       const db = rms > 0.00001 ? 20 * Math.log10(rms) : -100;
 
-      // Anel verde ativo quando o volume passar de -42 dB
-      const isSpeaking = db > -42;
-      const normalizedLevel = Math.min(100, Math.max(0, Math.round(((db + 60) / 60) * 100)));
+      // Anel verde ativo quando o volume passar de -50 dB (mais sensível que antes)
+      const isSpeaking = db > -50;
+      const peakDb = peak > 0.00001 ? 20 * Math.log10(peak) : -100;
+      const normalizedLevel = Math.min(
+        100,
+        Math.max(0, Math.round(((Math.max(db, peakDb - 12) + 60) / 60) * 100))
+      );
 
-      if (this.onSpeakingChange) {
-        this.onSpeakingChange(isSpeaking, normalizedLevel);
+      const levelChanged = Math.abs(normalizedLevel - this.lastLevel) >= 2;
+      const speakingChanged = isSpeaking !== this.lastIsSpeaking;
+
+      if (speakingChanged || levelChanged) {
+        this.lastIsSpeaking = isSpeaking;
+        this.lastLevel = normalizedLevel;
+        if (this.onSpeakingChange) {
+          this.onSpeakingChange(isSpeaking, normalizedLevel);
+        }
       }
-    }, 45);
+    }, 80);
+  }
+
+  public resume(): void {
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume().catch(() => {});
+    }
   }
 
   public setMicMuted(muted: boolean): void {
@@ -244,6 +307,8 @@ export class VoiceAudioPipeline {
       this.micMuteNode.gain.setTargetAtTime(muted ? 0 : 1, this.audioCtx.currentTime, 0.015);
     }
     if (muted && this.onSpeakingChange) {
+      this.lastIsSpeaking = false;
+      this.lastLevel = 0;
       this.onSpeakingChange(false, 0);
     }
   }
@@ -285,32 +350,27 @@ export class VoiceAudioPipeline {
       this.meterInterval = null;
     }
 
-    if (this.sourceNode) {
-      try { this.sourceNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.highPassFilter) {
-      try { this.highPassFilter.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.lowPassFilter) {
-      try { this.lowPassFilter.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.workletNode) {
-      try { this.workletNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.compressorNode) {
-      try { this.compressorNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.gainNode) {
-      try { this.gainNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.analyserNode) {
-      try { this.analyserNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.micMuteNode) {
-      try { this.micMuteNode.disconnect(); } catch { /* ignore */ }
-    }
-    if (this.soundboardInputNode) {
-      try { this.soundboardInputNode.disconnect(); } catch { /* ignore */ }
+    const nodes: Array<AudioNode | null> = [
+      this.sourceNode,
+      this.highPassFilter,
+      this.lowPassFilter,
+      this.workletNode,
+      this.compressorNode,
+      this.gainNode,
+      this.analyserNode,
+      this.analyserSinkNode,
+      this.micMuteNode,
+      this.soundboardInputNode,
+    ];
+
+    for (const node of nodes) {
+      if (node) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
     }
 
     if (this.audioCtx && this.audioCtx.state !== 'closed') {
@@ -319,5 +379,6 @@ export class VoiceAudioPipeline {
 
     this.audioCtx = null;
     this.processedStream = null;
+    this.onSpeakingChange = null;
   }
 }

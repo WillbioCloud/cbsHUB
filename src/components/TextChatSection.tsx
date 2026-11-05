@@ -11,6 +11,7 @@ import {
   Sparkles,
   Radio,
 } from 'lucide-react';
+import { shallow } from 'zustand/shallow';
 import { useHubStore } from '../store/useHubStore';
 import { webrtcEngine } from '../lib/webrtcEngine';
 import { EmojiPickerPopover } from './EmojiPickerPopover';
@@ -102,6 +103,9 @@ function renderMessageText(content: string) {
 }
 
 export const TextChatSection: React.FC = () => {
+  // Seletor com comparação rasa: o chat NÃO re-renderiza a lista inteira de
+  // mensagens a cada atualização de micLevel/isSpeaking (era o que travava o app
+  // durante a chamada). Só re-renderiza quando algo do chat realmente muda.
   const {
     messages,
     roomId,
@@ -114,7 +118,22 @@ export const TextChatSection: React.FC = () => {
     setUnreadCount,
     clearExpiredTyping,
     soundboardClips,
-  } = useHubStore();
+  } = useHubStore(
+    (state) => ({
+      messages: state.messages,
+      roomId: state.roomId,
+      isConnected: state.isConnected,
+      setRoomId: state.setRoomId,
+      clientId: state.clientId,
+      nickname: state.nickname,
+      typingUsers: state.typingUsers,
+      unreadCount: state.unreadCount,
+      setUnreadCount: state.setUnreadCount,
+      clearExpiredTyping: state.clearExpiredTyping,
+      soundboardClips: state.soundboardClips,
+    }),
+    shallow
+  );
 
   const handleCreateRandomRoom = async () => {
     const prefixes = ['jogatina', 'resenha', 'irmandade', 'gameplay', 'call'];

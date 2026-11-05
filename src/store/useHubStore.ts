@@ -361,7 +361,9 @@ export const useHubStore = create<HubState>()(
       // Streams remotos Mesh
       setRemoteStream: (peerId, type, stream) =>
         set((state) => {
-          const current = state.remoteStreams[peerId] || {};
+          // Cópia imutável: mutar o objeto anterior bagunçava a comparação do
+          // React e deixava tiles de tela "fantasmas" na interface.
+          const current = { ...(state.remoteStreams[peerId] || {}) };
           if (stream === null) {
             delete current[type];
           } else {
@@ -370,7 +372,7 @@ export const useHubStore = create<HubState>()(
           return {
             remoteStreams: {
               ...state.remoteStreams,
-              [peerId]: { ...current },
+              [peerId]: current,
             },
           };
         }),

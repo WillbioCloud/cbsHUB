@@ -1,5 +1,6 @@
+import {productionCsp} from './electron/security.ts';
 import { defineConfig } from 'vite';
-import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import react from '@vitejs/plugin-react';
@@ -8,6 +9,7 @@ import tailwindcss from '@tailwindcss/vite';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
+    {name:"cbshub-production-csp",apply:"build",transformIndexHtml(){return [{tag:"meta",attrs:{"http-equiv":"Content-Security-Policy",content:productionCsp},injectTo:"head-prepend"}];}},
     tailwindcss(),
     react(),
     electron([
@@ -30,12 +32,10 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
-            lib: {
-              entry: 'electron/preload.ts',
-              formats: ['cjs'],
-              fileName: () => 'preload.cjs',
-            },
+            // Disable the plugin's ES library default instead of merging format arrays.
+            lib: false,
             rollupOptions: {
+              input: "electron/preload.ts",
               external: ['electron'],
               output: {
                 format: 'cjs',
@@ -51,7 +51,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
 });

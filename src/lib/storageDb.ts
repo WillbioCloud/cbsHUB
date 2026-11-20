@@ -1,3 +1,4 @@
+import { compareMessages } from "../chat/model";
 import type { ChatMessage, SoundboardClip } from '../types/cbshub';
 
 const DB_NAME = 'cbshub_local_db';
@@ -64,17 +65,21 @@ class StorageDb {
   /* STORE: MESSAGES                                                           */
   /* ========================================================================= */
 
+  public async requirePersistentStorage(): Promise<void> {
+    if (!await this.getDb()) throw new Error('O armazenamento local está indisponível. A mensagem não foi enviada.');
+  }
+
   public async saveMessage(msg: ChatMessage): Promise<void> {
     const db = await this.getDb();
     if (!db) {
       const roomMsgs = this.memoryMessages.get(msg.roomId) || [];
-      const updated = [...roomMsgs.filter((m) => m.id !== msg.id), msg].sort((a, b) => a.createdAt - b.createdAt);
+      const updated = [...roomMsgs.filter((m) => m.id !== msg.id), msg].sort(compareMessages);
       if (updated.length > MAX_MESSAGES_PER_ROOM) updated.splice(0, updated.length - MAX_MESSAGES_PER_ROOM);
       this.memoryMessages.set(msg.roomId, updated);
       return;
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       try {
         const tx = db.transaction(STORE_MESSAGES, 'readwrite');
         const store = tx.objectStore(STORE_MESSAGES);
@@ -82,9 +87,11 @@ class StorageDb {
         tx.oncomplete = () => {
           this.trimRoomMessages(msg.roomId).finally(resolve);
         };
-        tx.onerror = () => resolve();
-      } catch {
-        resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Gravação cancelada.'));
+        tx.onabort = () => reject(tx.error);
+      } catch (error) {
+        reject(error);
       }
     });
   }
@@ -93,7 +100,7 @@ class StorageDb {
     const db = await this.getDb();
     if (!db) {
       const list = this.memoryMessages.get(roomId) || [];
-      return [...list].sort((a, b) => a.createdAt - b.createdAt).slice(-limit);
+      return [...list].sort(compareMessages).slice(-limit);
     }
 
     return new Promise((resolve) => {
@@ -102,17 +109,16 @@ class StorageDb {
         const store = tx.objectStore(STORE_MESSAGES);
         const index = store.index('by_room_time');
         const range = IDBKeyRange.bound([roomId, 0], [roomId, Number.MAX_SAFE_INTEGER]);
-        const request = index.getAll(range);
-
+        const result: ChatMessage[] = [];
+        const request = index.openCursor(range, 'prev');
         request.onsuccess = () => {
-          const result = (request.result as ChatMessage[]) || [];
-          result.sort((a, b) => a.createdAt - b.createdAt);
-          resolve(result.slice(-limit));
+          const cursor = request.result;
+          if (cursor && result.length < Math.min(500, Math.max(1, limit))) {
+            result.push(cursor.value as ChatMessage);
+            cursor.continue();
+          } else resolve(result.sort(compareMessages));
         };
-
-        request.onerror = () => {
-          resolve([]);
-        };
+        request.onerror = () => resolve([]);
       } catch {
         resolve([]);
       }
@@ -153,7 +159,7 @@ class StorageDb {
       }
     }
 
-    const merged = Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
+    const merged = Array.from(map.values()).sort(compareMessages);
     const toKeep = merged.slice(-MAX_MESSAGES_PER_ROOM);
 
     const db = await this.getDb();
@@ -170,7 +176,7 @@ class StorageDb {
           store.put(msg);
         }
         tx.oncomplete = () => {
-          resolve(toKeep);
+          this.trimRoomMessages(roomId).finally(() => resolve(toKeep));
         };
         tx.onerror = () => {
           resolve(toKeep);
@@ -268,26 +274,20 @@ class StorageDb {
     const db = await this.getDb();
     if (!db) return;
 
-    try {
-      const tx = db.transaction(STORE_MESSAGES, 'readwrite');
-      const store = tx.objectStore(STORE_MESSAGES);
-      const index = store.index('by_room_time');
-      const range = IDBKeyRange.bound([roomId, 0], [roomId, Number.MAX_SAFE_INTEGER]);
-      const req = index.getAll(range);
-
-      req.onsuccess = () => {
-        const msgs = (req.result as ChatMessage[]) || [];
-        if (msgs.length > MAX_MESSAGES_PER_ROOM) {
-          msgs.sort((a, b) => a.createdAt - b.createdAt);
-          const toDelete = msgs.slice(0, msgs.length - MAX_MESSAGES_PER_ROOM);
-          for (const item of toDelete) {
-            store.delete(item.id);
-          }
-        }
-      };
-    } catch {
-      // Ignora erro em limpeza
-    }
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_MESSAGES, 'readwrite');
+        const store = tx.objectStore(STORE_MESSAGES);
+        const index = store.index('by_room_time');
+        const range = IDBKeyRange.bound([roomId, 0], [roomId, Number.MAX_SAFE_INTEGER]);
+        const req = index.getAll(range);
+        req.onsuccess = () => {
+          const msgs = ((req.result as ChatMessage[]) || []).sort(compareMessages);
+          for (const item of msgs.slice(0, Math.max(0, msgs.length - MAX_MESSAGES_PER_ROOM))) store.delete(item.id);
+        };
+        tx.oncomplete = () => resolve();tx.onerror = () => resolve();tx.onabort = () => resolve();
+      } catch { resolve(); }
+    });
   }
 
   /* ========================================================================= */
@@ -295,6 +295,7 @@ class StorageDb {
   /* ========================================================================= */
 
   public async saveSoundboardClip(clip: SoundboardClip): Promise<void> {
+    if(clip.originalAudioBlob&&clip.originalAudioBlob.size>MAX_CLIP_SIZE_BYTES)throw Error("Original excede 5 MB.");
     if (clip.audioBlob && clip.audioBlob.size > MAX_CLIP_SIZE_BYTES) {
       throw new Error(`Arquivo de áudio muito grande (${(clip.audioBlob.size / (1024 * 1024)).toFixed(1)}MB). O limite é de 5MB.`);
     }
@@ -312,6 +313,7 @@ class StorageDb {
         store.put(clip);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Gravação cancelada.'));
       } catch (err) {
         reject(err);
       }

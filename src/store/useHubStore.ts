@@ -1,3 +1,4 @@
+import { compareMessages } from "../chat/model";
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
@@ -354,16 +355,14 @@ export const useHubStore = create<HubState>()(
         set((state) => ({
           peerVolumes: {
             ...state.peerVolumes,
-            [clientId]: Math.min(2.0, Math.max(0.0, volume)),
+            [clientId]: Math.min(1.0, Math.max(0.0, volume)),
           },
         })),
 
       // Streams remotos Mesh
       setRemoteStream: (peerId, type, stream) =>
         set((state) => {
-          // Cópia imutável: mutar o objeto anterior bagunçava a comparação do
-          // React e deixava tiles de tela "fantasmas" na interface.
-          const current = { ...(state.remoteStreams[peerId] || {}) };
+          const current = state.remoteStreams[peerId] || {};
           if (stream === null) {
             delete current[type];
           } else {
@@ -372,7 +371,7 @@ export const useHubStore = create<HubState>()(
           return {
             remoteStreams: {
               ...state.remoteStreams,
-              [peerId]: current,
+              [peerId]: { ...current },
             },
           };
         }),
@@ -384,11 +383,11 @@ export const useHubStore = create<HubState>()(
         }),
 
       // Chat P2P
-      setMessages: (messages) => set({ messages: [...messages].sort((a, b) => a.createdAt - b.createdAt) }),
+      setMessages: (messages) => set({ messages: [...messages].sort(compareMessages) }),
       addMessage: (message) =>
         set((state) => {
           if (state.messages.some((m) => m.id === message.id)) return state;
-          const merged = [...state.messages, message].sort((a, b) => a.createdAt - b.createdAt);
+          const merged = [...state.messages, message].sort(compareMessages);
           return { messages: merged.slice(-500) };
         }),
       addMessageBatch: (batch) =>
@@ -396,7 +395,7 @@ export const useHubStore = create<HubState>()(
           const map = new Map<string, ChatMessage>();
           for (const m of state.messages) map.set(m.id, m);
           for (const m of batch) map.set(m.id, m);
-          const sorted = Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
+          const sorted = Array.from(map.values()).sort(compareMessages);
           return { messages: sorted.slice(-500) };
         }),
       updateMessageReaction: (messageId, emoji, clientId, nickname) =>

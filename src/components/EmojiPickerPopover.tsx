@@ -335,7 +335,7 @@ export const EmojiPickerPopover: React.FC<EmojiPickerPopoverProps> = ({
       <PopoverContent
         side={side}
         align={align}
-        className={`w-80 p-3 bg-[#17171c] border-border text-popover-foreground shadow-2xl rounded-2xl select-none ${className || ''}`}
+        className={`w-80 p-3 bg-popover border-border text-popover-foreground shadow-2xl rounded-2xl select-none ${className || ''}`}
       >
         {/* Campo de Busca */}
         <div className="relative mb-2.5">
@@ -396,7 +396,7 @@ export const EmojiPickerPopover: React.FC<EmojiPickerPopoverProps> = ({
 
             <ScrollArea className="h-56 pr-1">
               <TabsContent value="recentes" className="mt-0 p-1">
-                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
+                <div className="text-2xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
                   Recentes
                 </div>
                 <div className="grid grid-cols-8 gap-1">
@@ -414,7 +414,7 @@ export const EmojiPickerPopover: React.FC<EmojiPickerPopoverProps> = ({
 
               {Object.entries(EMOJI_CATEGORIES).map(([catKey, cat]) => (
                 <TabsContent key={catKey} value={catKey} className="mt-0 p-1">
-                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
+                  <div className="text-2xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
                     {cat.label}
                   </div>
                   <div className="grid grid-cols-8 gap-1">

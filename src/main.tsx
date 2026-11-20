@@ -1,15 +1,20 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-import './index.css';
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+import { ProfileProvider } from "./profiles/ProfileProvider";
+import { StudioProvider } from "./studio/StudioProvider";
 
-const rootElement = document.getElementById('root');
+const rootElement = document.getElementById("root");
 
-// IMPORTANTE: NÃO usar <React.StrictMode> nesta aplicação.
-// O motor WebRTC é um singleton que abre conexões PeerJS, beacons e pipelines de áudio
-// no mount do App. O StrictMode executa os efeitos duas vezes em desenvolvimento,
-// o que criava DUAS malhas P2P completas (dois localPeer, dois beacons, sessões
-// duplicadas e áudio duplicado) e travava a entrada na chamada.
 if (rootElement) {
-  ReactDOM.createRoot(rootElement).render(<App />);
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <StudioProvider>
+        <ProfileProvider>
+          <App />
+        </ProfileProvider>
+      </StudioProvider>
+    </React.StrictMode>,
+  );
 }

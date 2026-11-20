@@ -96,19 +96,19 @@ export const ScreenPickerModal: React.FC = () => {
 
   return (
     <Dialog open={isScreenPickerOpen} onOpenChange={setIsScreenPickerOpen}>
-      <DialogContent className="max-w-3xl bg-zinc-950 border border-white/10 text-foreground p-0 overflow-hidden shadow-2xl flex flex-col max-h-[88vh]">
+      <DialogContent className="max-w-3xl bg-surface border border-border text-foreground p-0 overflow-hidden shadow-2xl flex flex-col max-h-[88vh]">
         {/* Cabeçalho */}
-        <DialogHeader className="p-5 border-b border-border/60 bg-zinc-900/40 shrink-0">
+        <DialogHeader className="p-5 border-b border-border/60 bg-card/40 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
               <Tv className="w-4 h-4" />
             </div>
             <div>
               <DialogTitle className="text-base font-bold text-foreground">
-                Compartilhar Tela de Ultra-Qualidade
+                Compartilhar tela
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                Selecione a tela ou janela, resolução de até 4K e áudio em estéreo a 60 FPS.
+                Escolha a fonte e a qualidade desejada. Resolução, FPS e áudio dependem do dispositivo e da rede.
               </DialogDescription>
             </div>
           </div>
@@ -183,7 +183,7 @@ export const ScreenPickerModal: React.FC = () => {
                           className="w-3.5 h-3.5 object-contain shrink-0"
                         />
                       )}
-                      <span className="text-[11px] text-foreground font-medium truncate flex-1" title={source.name}>
+                      <span className="text-caption text-foreground font-medium truncate flex-1" title={source.name}>
                         {source.name}
                       </span>
                     </div>
@@ -219,8 +219,8 @@ export const ScreenPickerModal: React.FC = () => {
                     }`}
                   >
                     <div className="font-bold text-xs text-foreground">{opt.label}</div>
-                    <div className="text-[11px] text-muted-foreground">{opt.sub}</div>
-                    <div className="text-[10px] text-primary font-semibold mt-0.5">{opt.bitrate}</div>
+                    <div className="text-caption text-muted-foreground">{opt.sub}</div>
+                    <div className="text-2xs text-primary font-semibold mt-0.5">{opt.bitrate}</div>
                   </button>
                 );
               })}
@@ -258,7 +258,7 @@ export const ScreenPickerModal: React.FC = () => {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center ${
                   includeSystemAudio
-                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    ? 'bg-success/15 text-success border border-success/30'
                     : 'bg-secondary text-muted-foreground'
                 }`}
               >
@@ -267,11 +267,11 @@ export const ScreenPickerModal: React.FC = () => {
               <div>
                 <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
                   <span>Compartilhar Áudio do Sistema (Loopback)</span>
-                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400">
+                  <span className="px-1.5 py-0.2 rounded text-micro font-bold uppercase tracking-wider bg-success/20 text-success">
                     Estéreo 256kbps
                   </span>
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
+                <p className="text-caption text-muted-foreground mt-0.5">
                   Transmite áudio de jogos, Discord e vídeos em estéreo de alta fidelidade para seus irmãos.
                 </p>
               </div>
@@ -285,8 +285,8 @@ export const ScreenPickerModal: React.FC = () => {
         </div>
 
         {/* Rodapé */}
-        <DialogFooter className="p-4 border-t border-border/60 bg-zinc-900/40 flex items-center justify-between shrink-0">
-          <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+        <DialogFooter className="p-4 border-t border-border/60 bg-card/40 flex items-center justify-between shrink-0">
+          <div className="text-caption text-muted-foreground flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-primary" />
             <span>Transmissão P2P direta sem compressão de servidores</span>
           </div>

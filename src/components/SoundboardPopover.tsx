@@ -1,319 +1,482 @@
-import React, { useState, useMemo } from 'react';
+import { AudioTrimEditor } from "./AudioTrimEditor";
+import React, { useMemo, useState } from "react";
 import {
   Volume2,
-  Sparkles,
   Plus,
   Square,
   Search,
   Star,
-  Trash2,
-  Music,
-  X,
-  VolumeX,
-} from 'lucide-react';
+  Play,
+  Settings2,
+  ArrowUp,
+} from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Slider } from "./ui/slider";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from './ui/popover';
-import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Slider } from './ui/slider';
-import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
-import { useHubStore } from '../store/useHubStore';
-import { webrtcEngine } from '../lib/webrtcEngine';
-import { soundboardEngine } from '../lib/soundboardEngine';
-import { storageDb } from '../lib/storageDb';
-import { AddSoundDialog } from './AddSoundDialog';
-import type { SoundboardClip } from '../types/cbshub';
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "./ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "./ui/dropdown-menu";
+import { useHubStore } from "../store/useHubStore";
+import { webrtcEngine } from "../lib/webrtcEngine";
+import { soundboardEngine } from "../lib/soundboardEngine";
+import { storageDb } from "../lib/storageDb";
+import { AddSoundDialog } from "./AddSoundDialog";
+import {
+  setSoundMode,
+  useSoundPreferences,
+  type SoundMode,
+} from "../chat/soundPreferences";
+import type { SoundboardClip } from "../types/cbshub";
 
-interface SoundboardPopoverProps {
+interface Props {
   trigger?: React.ReactNode;
-  side?: 'top' | 'bottom' | 'left' | 'right';
-  align?: 'start' | 'center' | 'end';
+  side?: "top" | "bottom" | "left" | "right";
+  align?: "start" | "center" | "end";
 }
-
-export const SoundboardPopover: React.FC<SoundboardPopoverProps> = ({
+export const SoundboardPopover: React.FC<Props> = ({
   trigger,
-  side = 'top',
-  align = 'center',
+  side = "top",
+  align = "center",
 }) => {
-  const {
-    soundboardClips,
-    soundboardVolume,
-    setSoundboardVolume,
-  } = useHubStore();
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'favorites' | 'custom'>('all');
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
-
-  // Filtro de clips baseado na aba e na busca
-  const filteredClips = useMemo(() => {
-    let list = soundboardClips;
-
-    if (activeTab === 'favorites') {
-      list = list.filter((c) => c.isFavorite);
-    } else if (activeTab === 'custom') {
-      list = list.filter((c) => !c.isBuiltIn);
+  const clips = useHubStore((s) => s.soundboardClips),
+    volume = useHubStore((s) => s.soundboardVolume),
+    inVoice = useHubStore((s) => s.inVoiceCall),
+    deafened = useHubStore((s) => s.isDeafened);
+  const mode = useSoundPreferences((s) => s.mode);
+  const [trimPending, setTrimPending] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [search, setSearch] = useState(""),
+    [tab, setTab] = useState("all"),
+    [category, setCategory] = useState("all");
+  const [adding, setAdding] = useState(false),
+    [editing, setEditing] = useState<SoundboardClip | null>(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const categories = useMemo(
+    () =>
+      [
+        ...new Set(
+          clips.map(
+            (c) => c.category || (c.isBuiltIn ? "Clássicos" : "Meus sons"),
+          ),
+        ),
+      ].sort(),
+    [clips],
+  );
+  const filtered = clips.filter(
+    (c) =>
+      (tab !== "favorites" || c.isFavorite) &&
+      (tab !== "custom" || !c.isBuiltIn) &&
+      (category === "all" ||
+        (c.category || (c.isBuiltIn ? "Clássicos" : "Meus sons")) ===
+          category) &&
+      `${c.name} ${c.emoji}`
+        .toLocaleLowerCase()
+        .includes(search.toLocaleLowerCase()),
+  );
+  const run = async (action: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível concluir.");
+    } finally {
+      setBusy(false);
     }
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      list = list.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          c.emoji.includes(q)
-      );
-    }
-
-    return list;
-  }, [soundboardClips, activeTab, searchQuery]);
-
-  const favoritesCount = useMemo(() => {
-    return soundboardClips.filter((c) => c.isFavorite).length;
-  }, [soundboardClips]);
-
-  const customCount = useMemo(() => {
-    return soundboardClips.filter((c) => !c.isBuiltIn).length;
-  }, [soundboardClips]);
-
-  const handlePlayClip = (clip: SoundboardClip) => {
-    setPlayingClipId(clip.id);
-    const duration = clip.durationSec ? clip.durationSec * 1000 : 2500;
-    setTimeout(() => {
-      setPlayingClipId((current) => (current === clip.id ? null : current));
-    }, Math.min(duration, 5000));
-    webrtcEngine.triggerSoundboardClip(clip);
   };
-
-  const handleToggleFavorite = async (e: React.MouseEvent, clipId: string) => {
-    e.stopPropagation();
-    await storageDb.toggleFavoriteClip(clipId);
+  const save = async (clip: SoundboardClip) => {
+    await storageDb.saveSoundboardClip(clip);
+    soundboardEngine.invalidateClip(clip.id);
     await webrtcEngine.loadSoundboardClips();
   };
-
-  const handleDeleteCustomClip = async (e: React.MouseEvent, clip: SoundboardClip) => {
-    e.stopPropagation();
-    if (window.confirm(`Tem certeza que deseja excluir o som "${clip.name}"?`)) {
-      await storageDb.deleteSoundboardClip(clip.id);
-      await webrtcEngine.loadSoundboardClips();
-    }
-  };
-
   return (
     <>
       <Popover>
         <PopoverTrigger asChild>
           {trigger || (
-            <Button
-              variant="secondary"
-              className="h-10 px-3 rounded-xl border border-border/60 hover:bg-accent text-foreground shadow-sm"
-            >
-              <Volume2 className="w-4 h-4 text-primary" />
+            <Button variant="secondary" aria-label="Abrir Efeitos Sonoros">
+              <Volume2 className="size-4" />
             </Button>
           )}
         </PopoverTrigger>
-
         <PopoverContent
           side={side}
           align={align}
-          className="w-80 md:w-96 p-3 space-y-3 bg-zinc-900/95 backdrop-blur-md border border-white/10 shadow-2xl z-50"
+          className="w-[min(26rem,calc(100vw-2rem))] max-h-[80dvh] overflow-y-auto p-4 space-y-3"
         >
-          {/* Cabeçalho */}
-          <div className="flex items-center justify-between pb-1 border-b border-border/50">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-primary" />
-              <span className="text-xs font-bold text-foreground">Soundboard</span>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">Efeitos Sonoros</h3>
+              <p className="text-xs text-muted-foreground">
+                {inVoice
+                  ? "Sons enviados à chamada"
+                  : "Reprodução somente neste dispositivo"}
+              </p>
             </div>
-
-            <div className="flex items-center gap-1.5">
+            <div className="flex gap-1">
               <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsAddDialogOpen(true)}
-                className="h-7 px-2 text-[11px] font-medium border-primary/40 hover:bg-primary/10 text-primary hover:text-primary flex items-center gap-1"
+                size="icon"
+                variant="ghost"
+                aria-label="Parar todos os sons"
+                onClick={() => soundboardEngine.stopAll()}
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Adicionar</span>
+                <Square className="size-4" />
               </Button>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => soundboardEngine.stopAll()}
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  >
-                    <Square className="w-3.5 h-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Parar todos os sons imediatamente</TooltipContent>
-              </Tooltip>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setAdding(true)}
+              >
+                <Plus className="size-4 mr-1" />
+                Adicionar
+              </Button>
             </div>
           </div>
-
-          {/* Campo de Busca Rápida */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          {error && (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          )}
+          {deafened && (
+            <p className="text-xs text-warning">
+              Áudio local silenciado. Sons ainda são enviados à chamada.
+            </p>
+          )}
+          <label className="flex items-center gap-2">
+            <Search className="size-4 text-muted-foreground" />
             <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar som por nome ou emoji..."
-              className="h-8 pl-8 pr-7 text-xs bg-secondary/80 border-border/60 focus-visible:ring-primary/40"
+              aria-label="Buscar sons"
+              placeholder="Buscar por nome ou emoji"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
             />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          {/* Abas de Categorias */}
-          <Tabs
-            value={activeTab}
-            onValueChange={(val) => setActiveTab(val as 'all' | 'favorites' | 'custom')}
-            className="w-full"
-          >
-            <TabsList className="w-full grid grid-cols-3 h-7 p-0.5 bg-secondary/80">
-              <TabsTrigger value="all" className="text-[11px] h-6">
-                Todos ({soundboardClips.length})
-              </TabsTrigger>
-              <TabsTrigger value="favorites" className="text-[11px] h-6 flex items-center gap-1">
-                <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                <span>Favoritos ({favoritesCount})</span>
-              </TabsTrigger>
-              <TabsTrigger value="custom" className="text-[11px] h-6">
-                Meus Sons ({customCount})
-              </TabsTrigger>
+          </label>
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList className="w-full grid grid-cols-3">
+              <TabsTrigger value="all">Todos</TabsTrigger>
+              <TabsTrigger value="favorites">Favoritos</TabsTrigger>
+              <TabsTrigger value="custom">Meus sons</TabsTrigger>
             </TabsList>
           </Tabs>
-
-          {/* Grade de Clipes de Áudio */}
-          <div className="grid grid-cols-2 gap-1.5 max-h-56 overflow-y-auto pr-1">
-            {filteredClips.length > 0 ? (
-              filteredClips.map((clip) => {
-                const isPlaying = playingClipId === clip.id;
-                return (
-                  <div
-                    key={clip.id}
-                    onClick={() => handlePlayClip(clip)}
-                    className={`group relative p-2 rounded-lg border text-left transition-all cursor-pointer flex items-center gap-2 select-none active:scale-[0.98] ${
-                      isPlaying
-                        ? 'bg-primary/20 border-primary ring-1 ring-primary/40 shadow-sm shadow-primary/20 animate-pulse'
-                        : 'bg-secondary/70 hover:bg-accent border-border/50'
-                    }`}
-                  >
-                    <span className="text-xl shrink-0 group-hover:scale-110 transition-transform">
-                      {clip.emoji}
-                    </span>
-
-                    <div className="min-w-0 flex-1 pr-5">
-                      <span className="text-xs font-semibold text-foreground truncate block leading-tight">
-                        {clip.name}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground block truncate">
-                        {clip.isBuiltIn ? 'Nativo' : 'Custom'}
-                      </span>
-                    </div>
-
-                    {/* Ações Rápidas no Hover */}
-                    <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {/* Favoritar */}
-                      <button
-                        onClick={(e) => handleToggleFavorite(e, clip.id)}
-                        title={clip.isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-                        className={`p-1 rounded hover:bg-secondary transition-colors ${
-                          clip.isFavorite ? 'text-amber-400' : 'text-muted-foreground hover:text-amber-400'
-                        }`}
-                      >
-                        <Star className={`w-3.5 h-3.5 ${clip.isFavorite ? 'fill-amber-400' : ''}`} />
-                      </button>
-
-                      {/* Excluir (somente customizados) */}
-                      {!clip.isBuiltIn && (
-                        <button
-                          onClick={(e) => handleDeleteCustomClip(e, clip)}
-                          title="Excluir efeito"
-                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Indicador de Favorito sempre visível se marcado */}
-                    {clip.isFavorite && (
-                      <div className="absolute right-1.5 top-1.5 group-hover:hidden">
-                        <Star className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              <div className="col-span-2 py-8 flex flex-col items-center justify-center text-center text-muted-foreground">
-                <Music className="w-7 h-7 mb-2 opacity-40" />
-                <p className="text-xs font-medium">Nenhum som encontrado</p>
-                <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-                  {activeTab === 'favorites'
-                    ? 'Marque uma estrela nos seus sons favoritos para vê-los aqui.'
-                    : activeTab === 'custom'
-                    ? 'Adicione seus próprios arquivos .mp3 ou .wav de até 5MB.'
-                    : 'Tente buscar por outro termo.'}
-                </p>
-                {activeTab === 'custom' && (
+          <div className="flex gap-2 flex-wrap">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  Categoria: {category === "all" ? "Todas" : category}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuRadioGroup
+                  value={category}
+                  onValueChange={setCategory}
+                >
+                  <DropdownMenuRadioItem value="all">
+                    Todas
+                  </DropdownMenuRadioItem>
+                  {categories.map((c) => (
+                    <DropdownMenuRadioItem key={c} value={c}>
+                      {c}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  Eventos no chat
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuRadioGroup
+                  value={mode}
+                  onValueChange={(value) =>
+                    void run(async () => setSoundMode(value as SoundMode))
+                  }
+                >
+                  <DropdownMenuRadioItem value="normal">
+                    Eventos normais
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="compact">
+                    Eventos compactos
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="hidden">
+                    Somente atividades
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
+            {filtered.map((clip) => (
+              <div
+                key={clip.id}
+                className="rounded-lg border border-border bg-secondary/40 p-2 space-y-1"
+              >
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  className="w-full h-auto py-3 flex flex-col gap-1"
+                  aria-label={`Tocar ${clip.name}`}
+                  onClick={() =>
+                    void run(() => webrtcEngine.triggerSoundboardClip(clip))
+                  }
+                >
+                  <span className="text-2xl">{clip.emoji}</span>
+                  <span className="text-xs truncate max-w-full">
+                    {clip.name}
+                  </span>
+                </Button>
+                <div className="flex items-center justify-between">
                   <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setIsAddDialogOpen(true)}
-                    className="mt-3 h-7 text-xs border-primary/40 text-primary"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label={`Prévia de ${clip.name}`}
+                    title="Ouvir somente neste dispositivo"
+                    disabled={busy || deafened}
+                    onClick={() =>
+                      void run(() => soundboardEngine.playClip(clip, true))
+                    }
                   >
-                    <Plus className="w-3 h-3 mr-1" />
-                    Importar Som
+                    <Play className="size-3" />
                   </Button>
-                )}
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label={`Favoritar ${clip.name}`}
+                    aria-pressed={clip.isFavorite}
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() =>
+                        save({ ...clip, isFavorite: !clip.isFavorite }),
+                      )
+                    }
+                  >
+                    <Star
+                      className={`size-3 ${clip.isFavorite ? "fill-current text-warning" : ""}`}
+                    />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label={`Editar ${clip.name}`}
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      setTrimPending(false);
+                      setEditing({ ...clip });
+                    }}
+                  >
+                    <Settings2 className="size-3" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label={`Mover ${clip.name} para o início`}
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() =>
+                        save({
+                          ...clip,
+                          order:
+                            Math.min(
+                              0,
+                              ...clips.map((c) => c.order ?? c.createdAt),
+                            ) - 1,
+                        }),
+                      )
+                    }
+                  >
+                    <ArrowUp className="size-3" />
+                  </Button>
+                </div>
               </div>
+            ))}
+            {!filtered.length && (
+              <p className="col-span-2 py-6 text-center text-xs text-muted-foreground">
+                Nenhum som encontrado.
+              </p>
             )}
           </div>
-
-          {/* Rodapé: Volume Master do Soundboard */}
-          <div className="pt-2 border-t border-border/50 space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1">
-                {soundboardVolume === 0 ? (
-                  <VolumeX className="w-3.5 h-3.5 text-destructive" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5 text-primary" />
-                )}
-                <span>Volume dos Efeitos</span>
-              </span>
-              <span className="font-mono font-bold text-foreground">
-                {Math.round(soundboardVolume * 100)}%
-              </span>
-            </div>
+          <div className="border-t border-border pt-3 space-y-2">
+            <label className="text-xs flex justify-between">
+              Volume dos efeitos<span>{Math.round(volume * 100)}%</span>
+            </label>
             <Slider
+              aria-label="Volume dos efeitos"
               min={0}
               max={1.5}
               step={0.05}
-              value={[soundboardVolume]}
-              onValueChange={([val]) => setSoundboardVolume(val)}
+              value={[volume]}
+              onValueChange={([value]) =>
+                useHubStore.getState().setSoundboardVolume(value)
+              }
             />
           </div>
+          <p className="text-micro text-muted-foreground">
+            Sons importados ficam neste dispositivo. Na chamada, compartilham a
+            faixa de voz e o volume do participante.
+          </p>
         </PopoverContent>
       </Popover>
-
-      {/* Modal de Importação Renderizado Fora do Popover para Evitar Fechamento Indesejado */}
-      <AddSoundDialog
-        open={isAddDialogOpen}
-        onOpenChange={setIsAddDialogOpen}
-      />
+      <AddSoundDialog open={adding} onOpenChange={setAdding} />
+      <Dialog
+        open={!!editing}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>Personalizar botão de som</DialogTitle>
+          <DialogDescription>
+            Nome, emoji, categoria e volume são salvos neste dispositivo.
+          </DialogDescription>
+          {editing && (
+            <>
+              {error && (
+                <p role="alert" className="text-destructive text-xs">
+                  {error}
+                </p>
+              )}
+              <label className="space-y-1 text-sm">
+                Nome
+                <Input
+                  aria-label="Nome do som"
+                  maxLength={60}
+                  value={editing.name}
+                  onChange={(e) =>
+                    setEditing({ ...editing, name: e.target.value })
+                  }
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                Emoji
+                <Input
+                  aria-label="Emoji do som"
+                  maxLength={12}
+                  value={editing.emoji}
+                  onChange={(e) =>
+                    setEditing({ ...editing, emoji: e.target.value })
+                  }
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                Categoria
+                <Input
+                  aria-label="Categoria do som"
+                  maxLength={32}
+                  value={editing.category || ""}
+                  placeholder={editing.isBuiltIn ? "Clássicos" : "Meus sons"}
+                  onChange={(e) =>
+                    setEditing({ ...editing, category: e.target.value })
+                  }
+                />
+              </label>
+              <label className="space-y-2 text-sm">
+                Volume: {Math.round(editing.volume * 100)}%
+                <Slider
+                  aria-label="Volume deste som"
+                  min={0}
+                  max={1.5}
+                  step={0.05}
+                  value={[editing.volume]}
+                  onValueChange={([value]) =>
+                    setEditing({ ...editing, volume: value })
+                  }
+                />
+              </label>
+              {!editing.isBuiltIn && editing.audioBlob && (
+                <AudioTrimEditor
+                  source={editing.originalAudioBlob || editing.audioBlob}
+                  initialStart={editing.trimStartSec}
+                  initialEnd={editing.trimEndSec}
+                  onPendingChange={() => setTrimPending(true)}
+                  onApply={(blob, seconds, start, end) => {
+                    setTrimPending(false);
+                    setEditing({
+                      ...editing,
+                      audioBlob: blob,
+                      originalAudioBlob:
+                        editing.originalAudioBlob || editing.audioBlob,
+                      durationSec: seconds,
+                      trimStartSec: start,
+                      trimEndSec: end,
+                    });
+                  }}
+                />
+              )}
+              {editing.isBuiltIn && (
+                <p className="text-xs text-muted-foreground">
+                  Efeito sintetizado: corte disponível para arquivos importados.
+                </p>
+              )}
+              <DialogFooter>
+                {!editing.isBuiltIn && (
+                  <Button
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() =>
+                      confirmDelete
+                        ? void run(async () => {
+                            await storageDb.deleteSoundboardClip(editing.id);
+                            await webrtcEngine.loadSoundboardClips();
+                            setEditing(null);
+                          })
+                        : setConfirmDelete(true)
+                    }
+                  >
+                    {confirmDelete
+                      ? "Confirmar exclusão do som e original"
+                      : "Excluir som"}
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setEditing(null)}>
+                  Cancelar
+                </Button>
+                <Button
+                  disabled={
+                    busy ||
+                    trimPending ||
+                    !editing.name.trim() ||
+                    !editing.emoji.trim()
+                  }
+                  onClick={() =>
+                    void run(async () => {
+                      await save({
+                        ...editing,
+                        name: editing.name.trim(),
+                        emoji: editing.emoji.trim(),
+                        category: editing.category?.trim(),
+                      });
+                      setEditing(null);
+                    })
+                  }
+                >
+                  Salvar som
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

@@ -1,0 +1,46 @@
+{
+  "format": "cbshub-studio",
+  "version": 1,
+  "theme": {
+    "name": "Dark Modern",
+    "mode": "dark",
+    "colors": {
+      "background": "#13161b",
+      "sidebar": "#171b21",
+      "messages": "#13161b",
+      "editor": "#1c2128",
+      "button": "#6eddbd",
+      "buttonText": "#10251e",
+      "text": "#e7ebef",
+      "muted": "#a0a8b5",
+      "accent": "#6eddbd",
+      "border": "#303640",
+      "hover": "#303945",
+      "focus": "#88eace"
+    },
+    "background": {
+      "kind": "solid",
+      "from": "#172c30",
+      "to": "#29233e",
+      "angle": 135,
+      "image": "",
+      "opacity": 0.3,
+      "blur": 0
+    },
+    "layout": {
+      "sidebarWidth": 264,
+      "sidebarCollapsed": false,
+      "membersOpen": true,
+      "density": 1,
+      "avatarSize": 36,
+      "fontSize": 14,
+      "scale": 1,
+      "radius": 12,
+      "spacing": 1,
+      "shadow": 0.22,
+      "transparency": 1,
+      "animations": true,
+      "reducedMotion": false
+    }
+  }
+}

@@ -1,99 +1,213 @@
-import React, { useEffect, useRef } from 'react';
-import { TitleBar } from './components/TitleBar';
-import { LeftSidebar } from './components/LeftSidebar';
-import { RoomTopBar } from './components/RoomTopBar';
-import { CallStagePanel } from './components/CallStagePanel';
-import { TextChatSection } from './components/TextChatSection';
-import { ScreenPickerModal } from './components/ScreenPickerModal';
-import { SettingsModal } from './components/SettingsModal';
-import { TooltipProvider } from './components/ui/tooltip';
-import { shallow } from 'zustand/shallow';
-import { useHubStore } from './store/useHubStore';
-import { webrtcEngine } from './lib/webrtcEngine';
+import { useMediaState } from "./lib/mediaState";
+import { BootSplash, ConnectionScreen } from "./components/ConnectionScreen";
+import { usePushToTalk } from "./hooks/usePushToTalk";
+import { useShallow } from "zustand/react/shallow";
+import React, { useEffect, useState } from "react";
+import { TitleBar } from "./components/TitleBar";
+import { LeftSidebar } from "./components/LeftSidebar";
+import { RoomTopBar } from "./components/RoomTopBar";
+import { CallStagePanel } from "./components/CallStagePanel";
+import { TextChatSection } from "./components/TextChatSection";
+import { ScreenPickerModal } from "./components/ScreenPickerModal";
+import { SettingsModal } from "./components/SettingsModal";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { useHubStore } from "./store/useHubStore";
+import { webrtcEngine } from "./lib/webrtcEngine";
+import { WorkspaceRail } from "./components/WorkspaceRail";
+import { MembersPanel } from "./components/MembersPanel";
+import { ResizeHandle } from "./components/ui/resize-handle";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+} from "./components/ui/sheet";
+import {
+  useWorkspaceLayout,
+  useMediaQuery,
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
+} from "./hooks/useWorkspaceLayout";
+
+import { MediaNotice } from "./components/CallStatus";
+import { ProfileDialog } from "./profiles/ProfileDialog";
 
 export const App: React.FC = () => {
-  // Assinatura mínima: se o App re-renderizar, TODA a árvore re-renderiza.
-  // Antes ele assinava a store inteira e isso acontecia a cada nível de microfone
-  // (era o que travava a interface durante a chamada).
-  const { isSettingsOpen, isScreenPickerOpen, setIsSettingsOpen, setIsScreenPickerOpen, roomId } =
-    useHubStore(
-      (state) => ({
-        isSettingsOpen: state.isSettingsOpen,
-        isScreenPickerOpen: state.isScreenPickerOpen,
-        setIsSettingsOpen: state.setIsSettingsOpen,
-        setIsScreenPickerOpen: state.setIsScreenPickerOpen,
-        roomId: state.roomId,
-      }),
-      shallow
-    );
-  const bootstrappedRef = useRef(false);
-
-  // 1. Inicialização do microfone e da sala executada apenas UMA VEZ no mount.
-  // Guard extra além do React.StrictMode desativado: nunca abrir duas malhas P2P.
+  usePushToTalk();
+  const trayInVoice = useHubStore((s) => s.inVoiceCall),
+    trayReconnecting = useMediaState((s) => s.reconnecting);
   useEffect(() => {
-    if (bootstrappedRef.current) return;
-    bootstrappedRef.current = true;
+    window.cbsHubAPI?.updateTrayState?.({
+      inVoiceCall: trayInVoice,
+      reconnecting: trayReconnecting,
+    });
+  }, [trayInVoice, trayReconnecting]);
+  const [booting, setBooting] = useState(true);
+  const {
+    isSettingsOpen,
+    isScreenPickerOpen,
+    setIsSettingsOpen,
+    setIsScreenPickerOpen,
+    roomId,
+  } = useHubStore(
+    useShallow((state) => ({
+      isSettingsOpen: state.isSettingsOpen,
+      isScreenPickerOpen: state.isScreenPickerOpen,
+      setIsSettingsOpen: state.setIsSettingsOpen,
+      setIsScreenPickerOpen: state.setIsScreenPickerOpen,
+      roomId: state.roomId,
+    })),
+  );
 
-    const bootstrap = async () => {
-      // Microfone primeiro: garante que o pipeline já exista antes de qualquer
-      // negociação de voz, evitando entrar na call sem track de áudio.
-      try {
-        await webrtcEngine.setupLocalMicrophone();
-      } catch (err) {
-        console.warn('[App] Erro ao inicializar microfone no arranque:', err);
-      }
+  const layout = useWorkspaceLayout();
+  const compact = useMediaQuery("(max-width: 767px)");
+  const membersOverlay = useMediaQuery("(max-width: 1100px)");
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const [mobileMembersOpen, setMobileMembersOpen] = useState(false);
+  const sidebarOpen = compact ? navigationOpen : !layout.sidebarCollapsed;
+  const membersOpen = membersOverlay ? mobileMembersOpen : layout.membersOpen;
+  const toggleSidebar = () =>
+    compact ? setNavigationOpen((open) => !open) : layout.toggleSidebar();
+  const toggleMembers = () =>
+    membersOverlay
+      ? setMobileMembersOpen((open) => !open)
+      : layout.toggleMembers();
 
-      const initialRoom = roomId || 'cbs-irmandade';
-      try {
-        await webrtcEngine.joinRoom(initialRoom, false);
-      } catch (err) {
-        console.warn('[App] Erro ao conectar na sala inicial:', err);
-      }
+  // 1. Inicialização do microfone e da sala executada apenas UMA VEZ no mount
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const minimum = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 5000);
+    });
+    const removed =
+      localStorage.getItem("cbshub-room-removed-active") === "1" && !roomId;
+    const startup = removed
+      ? Promise.resolve()
+      : webrtcEngine
+          .joinRoom(roomId || "cbs-irmandade", false)
+          .catch((err) => console.warn("[App] Inicialização", err));
+    void Promise.all([startup, minimum]).then(() => {
+      if (active) setBooting(false);
+    });
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      webrtcEngine.leaveRoom();
     };
-
-    void bootstrap();
   }, []); // Array de dependências vazio estrito
+
+  useEffect(() => {
+    const online = () => webrtcEngine.notifyNetwork(true),
+      offline = () => webrtcEngine.notifyNetwork(false);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+    };
+  }, []);
 
   // 2. Listener global de teclado (ESC fecha modais ativos)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (isSettingsOpen) setIsSettingsOpen(false);
+      if (e.key === "Escape") {
         if (isScreenPickerOpen) setIsScreenPickerOpen(false);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isSettingsOpen, isScreenPickerOpen, setIsSettingsOpen, setIsScreenPickerOpen]);
+  }, [
+    isSettingsOpen,
+    isScreenPickerOpen,
+    setIsSettingsOpen,
+    setIsScreenPickerOpen,
+  ]);
 
+  if (booting)
+    return (
+      <TooltipProvider>
+        <TitleBar />
+        <BootSplash />
+      </TooltipProvider>
+    );
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="h-screen w-screen overflow-hidden flex flex-col bg-background text-foreground font-sans antialiased">
-        {/* 1. TitleBar Slim com Controles de Janela Nativos e Status */}
+      <div className="workspace-root">
         <TitleBar />
-
-        {/* 2. Área de Trabalho: LeftSidebar (240px) + MainWorkspace */}
-        <div className="flex-1 flex overflow-hidden relative">
-          <LeftSidebar />
-
-          <main className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden relative">
-            {/* TopBar da Sala */}
-            <RoomTopBar />
-
-            {/* Palco Superior Retrátil da Ligação (Grid / Spotlight 4K60 / Minimized) */}
-            <CallStagePanel />
-
-            {/* Área Inferior Principal: Chat de Texto & Reações P2P Sincronizado */}
-            <TextChatSection />
+        {booting && <BootSplash />}
+        <ConnectionScreen />
+        <div className="workspace-body">
+          <WorkspaceRail
+            sidebarOpen={sidebarOpen}
+            membersOpen={membersOpen}
+            onToggleSidebar={toggleSidebar}
+            onToggleMembers={toggleMembers}
+          />
+          {!compact && sidebarOpen && (
+            <div
+              className="workspace-sidebar"
+              style={{ width: layout.sidebarWidth }}
+            >
+              <LeftSidebar />
+              <ResizeHandle
+                value={layout.sidebarWidth}
+                min={SIDEBAR_MIN}
+                max={SIDEBAR_MAX}
+                onChange={layout.setSidebarWidth}
+              />
+            </div>
+          )}
+          <main className="workspace-main" id="conversation-workspace">
+            <RoomTopBar
+              membersOpen={membersOpen}
+              onToggleMembers={toggleMembers}
+            />
+            <div className="workspace-content">
+              <div className="workspace-conversation">
+                <MediaNotice />
+                <CallStagePanel />
+                <TextChatSection />
+              </div>
+              {!membersOverlay && layout.membersOpen && (
+                <MembersPanel onClose={layout.toggleMembers} />
+              )}
+            </div>
           </main>
         </div>
+        <Sheet
+          open={compact && navigationOpen}
+          onOpenChange={setNavigationOpen}
+        >
+          <SheetContent side="left">
+            <SheetTitle className="sr-only">Navegação de salas</SheetTitle>
+            <SheetDescription className="sr-only">
+              Entre em uma sala ou abra uma conversa recente.
+            </SheetDescription>
+            <LeftSidebar onNavigate={() => setNavigationOpen(false)} />
+          </SheetContent>
+        </Sheet>
+        <Sheet
+          open={membersOverlay && mobileMembersOpen}
+          onOpenChange={setMobileMembersOpen}
+        >
+          <SheetContent side="right">
+            <SheetTitle className="sr-only">Membros da sala</SheetTitle>
+            <SheetDescription className="sr-only">
+              Participantes e controles individuais de áudio.
+            </SheetDescription>
+            <MembersPanel onClose={() => setMobileMembersOpen(false)} />
+          </SheetContent>
+        </Sheet>
 
         {/* 3. Modais do Sistema */}
         <ScreenPickerModal />
         <SettingsModal />
+
+        <ProfileDialog />
       </div>
     </TooltipProvider>
   );
